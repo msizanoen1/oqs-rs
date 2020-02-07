@@ -1,4 +1,5 @@
 use std::ffi::{CStr, CString};
+use std::mem::MaybeUninit;
 
 pub use failure::Error;
 pub use liboqs_sys as ffi;
@@ -145,5 +146,94 @@ impl Signature {
             failure::bail!("unknown signature scheme: {}", name);
         }
         Ok(Self(raw))
+    }
+
+    pub fn method_name(&self) -> &str {
+        unsafe { CStr::from_ptr((*self.0).method_name).to_str().unwrap() }
+    }
+
+    pub fn alg_version(&self) -> &str {
+        unsafe { CStr::from_ptr((*self.0).alg_version).to_str().unwrap() }
+    }
+
+    pub fn length_public_key(&self) -> usize {
+        unsafe { (*self.0).length_public_key as usize }
+    }
+
+    pub fn length_secret_key(&self) -> usize {
+        unsafe { (*self.0).length_secret_key as usize }
+    }
+
+    pub fn length_signature(&self) -> usize {
+        unsafe { (*self.0).length_signature as usize }
+    }
+
+    /// Return public key and secret key.
+    pub fn keypair(&self) -> (Vec<u8>, Vec<u8>) {
+        let mut public = vec![0; self.length_public_key()];
+        let mut secret = vec![0; self.length_secret_key()];
+        unsafe {
+            if ffi::OQS_SIG_keypair(self.0, public.as_mut_ptr(), secret.as_mut_ptr())
+                != ffi::OQS_STATUS_OQS_SUCCESS
+            {
+                panic!("internal error: keypair generation failed");
+            }
+        }
+        (public, secret)
+    }
+
+    pub fn sign(
+        &self,
+        signature: &mut [u8],
+        message: &[u8],
+        secret_key: &[u8],
+    ) -> Result<usize, Error> {
+        let mut signature_len = MaybeUninit::uninit();
+        if signature.len() < self.length_signature() || secret_key.len() != self.length_secret_key()
+        {
+            failure::bail!("invalid parameter length");
+        }
+        unsafe {
+            if ffi::OQS_SIG_sign(
+                self.0,
+                signature.as_mut_ptr(),
+                signature_len.as_mut_ptr(),
+                message.as_ptr(),
+                message.len() as ffi::size_t,
+                secret_key.as_ptr(),
+            ) != ffi::OQS_STATUS_OQS_SUCCESS
+            {
+                failure::bail!("signing failure");
+            }
+            Ok(signature_len.assume_init() as usize)
+        }
+    }
+
+    pub fn sign_to_vec(&self, message: &[u8], secret_key: &[u8]) -> Result<Vec<u8>, Error> {
+        let mut sig = vec![0; self.length_signature()];
+        let size = self.sign(&mut sig, message, secret_key)?;
+        sig.truncate(size);
+        Ok(sig)
+    }
+
+    pub fn verify(&self, message: &[u8], signature: &[u8], public_key: &[u8]) -> Result<(), Error> {
+        if public_key.len() != self.length_public_key() || signature.len() > self.length_signature()
+        {
+            failure::bail!("invalid parameter length");
+        }
+        unsafe {
+            if ffi::OQS_SIG_verify(
+                self.0,
+                message.as_ptr(),
+                message.len() as ffi::size_t,
+                signature.as_ptr(),
+                signature.len() as ffi::size_t,
+                public_key.as_ptr(),
+            ) != ffi::OQS_STATUS_OQS_SUCCESS
+            {
+                failure::bail!("verification failure");
+            }
+        }
+        Ok(())
     }
 }
