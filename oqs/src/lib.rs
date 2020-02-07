@@ -189,7 +189,8 @@ impl Signature {
         secret_key: &[u8],
     ) -> Result<usize, Error> {
         let mut signature_len = MaybeUninit::uninit();
-        if signature.len() < self.length_signature() || secret_key.len() != self.length_secret_key()
+        if signature.len() != self.length_signature()
+            || secret_key.len() != self.length_secret_key()
         {
             failure::bail!("invalid parameter length");
         }
